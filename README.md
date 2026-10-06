@@ -29,6 +29,7 @@ Feito em **HTML, CSS e JavaScript puro**, sem framework e sem etapa de build. Fu
 **Outros**
 - Abre com ~2 meses de **dados simulados** pra explorar; um toque apaga e começa do zero
 - Backup em JSON (exportar e importar)
+- Aviso de versão nova, botão "Procurar atualização" e, pro admin, "Atualizar todos os aparelhos" (via Firestore em tempo real)
 - Login com Google, sincronização local-primeiro e painel de admin (opcional, via Firebase)
 
 ## Como funciona a IA
@@ -62,11 +63,13 @@ Abra http://localhost:8765. Sem Firebase configurado, tudo fica salvo no `localS
 3. **Firestore Database** → crie o banco.
 4. Registre um **app Web** e cole a configuração em `firebase-config.js`.
 5. Troque `admin@exemplo.com` pelo seu e-mail em `firebase-config.js` **e** em `firestore.rules`.
-6. Publique:
+6. Publique (o script aumenta a versão do app e confere o que ficou público):
 
 ```bash
-npx firebase-tools deploy --only hosting,firestore:rules --project SEU-PROJETO
+python tools/publicar.py SEU-PROJETO
 ```
+
+7. No app, como admin: Perfil → Conta → Painel do admin → **Atualizar todos os aparelhos**. Quem estiver com o app aberto recarrega na hora; os outros ao abrir.
 
 Estrutura no Firestore:
 - `users/{uid}`: nome, e-mail, último acesso, resumo e o estado do app (JSON)

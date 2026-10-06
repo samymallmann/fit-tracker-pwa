@@ -13,6 +13,12 @@ service cloud.firestore {
         && request.auth.token.email in ['admin@exemplo.com']; // troque pelo(s) e-mail(s) de admin
     }
 
+    // aviso de versão nova: todos leem, só o admin escreve
+    match /config/{doc} {
+      allow read: if true;
+      allow write: if admin();
+    }
+
     match /users/{uid} {
       allow read, write: if logado(uid);
       allow read: if admin();

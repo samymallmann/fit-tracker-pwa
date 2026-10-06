@@ -10,7 +10,9 @@
       ".git/**",
       "**/.*",
       "**/node_modules/**",
-      "*.log"
+      "*.log",
+      "tools/**",
+      "*.py"
     ],
     "headers": [
       {

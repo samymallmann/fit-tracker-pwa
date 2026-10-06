@@ -30,6 +30,11 @@ async function nuvemIniciar() {
     const app = appM.initializeApp(window.FIREBASE_CONFIG);
     fb = { ...authM, ...fsM, auth: authM.getAuth(app), db: fsM.getFirestore(app) };
     NUVEM.pronto = true;
+    // o admin pode pedir que todos os aparelhos atualizem (config/app.versaoMinima)
+    fb.onSnapshot(fb.doc(fb.db, 'config', 'app'), snap => {
+      const v = Number(snap.data()?.versaoMinima || 0);
+      if (v > VERSAO_APP) atualizarAgora('Tem uma versão nova do app.');
+    }, () => { });
     fb.getRedirectResult(fb.auth).catch(e => { NUVEM.erro = ERROS_LOGIN[e.code] || null; atualizaContaUI(); });
     fb.onAuthStateChanged(fb.auth, async user => {
       NUVEM.user = user;
@@ -231,7 +236,9 @@ const quando = ms => {
 function adminHTML() {
   if (!NUVEM.usuarios) return '<h3>🛡️ Usuários</h3><div class="spinner"></div>';
   return `<div class="row between"><h3 style="margin:0">🛡️ Usuários (${NUVEM.usuarios.length})</h3>
-      <button class="btn sm ghost" data-act="adminAbrir">↻ Atualizar</button></div>
+      <button class="btn sm ghost" data-act="adminAbrir">↻ Recarregar lista</button></div>
+    <button class="btn sm primary" data-act="adminAtualizarTodos" style="margin:10px 0 4px">📣 Atualizar todos os aparelhos</button>
+    <p class="muted small" style="margin:0 0 6px">Use depois de publicar uma versão nova: quem estiver com o app aberto atualiza na hora, os outros ao abrir.</p>
     <ul class="list">${NUVEM.usuarios.map(u => {
       const r = u.resumo || {};
       return `<li class="pick" data-act="adminVer" data-uid="${esc(u.uid)}">
@@ -302,6 +309,15 @@ async function adminVer(uid) {
 /* ---- ações e inicialização ---- */
 
 Object.assign(ACTIONS, {
+  adminAtualizarTodos: async () => {
+    try {
+      const v = await versaoNoServidor();
+      if (v > VERSAO_APP) { toast('Este aparelho ainda está numa versão antiga. Atualizando primeiro…'); atualizarAgora(''); return; }
+      if (!confirm(`Pedir pra todos os aparelhos atualizarem pra versão ${VERSAO_APP}?`)) return;
+      await fb.setDoc(fb.doc(fb.db, 'config', 'app'), { versaoMinima: VERSAO_APP, em: Date.now(), por: NUVEM.user.email });
+      toast('Pedido enviado 📣 Aparelhos abertos atualizam agora; os outros ao abrir.');
+    } catch (e) { toast('Não deu pra enviar: ' + (e.code || e.message)); }
+  },
   nuvemEntrar,
   nuvemSair: async () => {
     if (!confirm('Sair da conta? Os dados continuam neste aparelho, mas param de ir pra nuvem.')) return;

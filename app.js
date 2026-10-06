@@ -23,6 +23,7 @@ const fmtData = iso => parseISO(iso).toLocaleDateString('pt-BR', { weekday: 'lon
 /* ---------------- estado ---------------- */
 
 const KEY = 'fitlog:v1';
+const VERSAO_APP = 5; // tools/publicar.py aumenta junto com CACHE em sw.js
 const MODELO_PADRAO = 'gemini-3.8-flash'; // o app troca sozinho se o Google aposentar este
 
 function ex(nome, series, reps, carga = '', obs = '') { return { id: uid(), nome, series, reps, carga, obs }; }
@@ -1753,6 +1754,10 @@ function renderPerfil() {
       <button class="btn sm" data-act="testKey">Testar chave e listar modelos</button>
       <div id="keyStatus" class="muted small" style="margin-top:8px"></div>
 
+      <h3 style="margin-top:18px">Atualização</h3>
+      <div class="row between"><span class="muted small">Versão do app: <b>${VERSAO_APP}</b></span>
+        <button class="btn sm" data-act="procurarAtualizacao">🔄 Procurar atualização</button></div>
+
       <h3 style="margin-top:18px">Backup</h3>
       <p class="muted small">Os dados ficam só neste navegador. Exporte de vez em quando para não perder nada (ou para passar para outro celular).</p>
       <div class="row">
@@ -2151,3 +2156,29 @@ function avisoAtualizacao() {
   $('.topbar').after(b);
 }
 ACTIONS.recarregar = () => location.reload();
+
+// versão publicada no servidor (lida do sw.js, sem cache)
+async function versaoNoServidor() {
+  const txt = await (await fetch('sw.js', { cache: 'no-store' })).text();
+  return Number((txt.match(/const CACHE = '[a-z]+-v(\d+)'/) || [])[1] || 0);
+}
+
+// recarrega pra pegar a versão nova; evita ficar recarregando em loop se o servidor ainda não tiver a versão
+function atualizarAgora(motivo) {
+  let ultima = 0;
+  try { ultima = Number(sessionStorage.getItem('fitlog:recarregou') || 0); } catch (e) { }
+  if (Date.now() - ultima < 2 * 60 * 1000) { avisoAtualizacao(); return; }
+  try { sessionStorage.setItem('fitlog:recarregou', String(Date.now())); } catch (e) { }
+  toast(`${motivo} Atualizando…`);
+  setTimeout(() => location.reload(), 1200);
+}
+
+ACTIONS.procurarAtualizacao = async el => {
+  el.disabled = true; el.textContent = 'Procurando…';
+  try {
+    const v = await versaoNoServidor();
+    if (v > VERSAO_APP) { atualizarAgora(`Versão ${v} encontrada.`); return; }
+    toast(`Você já está na versão mais nova (${VERSAO_APP}).`);
+  } catch (e) { toast('Sem internet agora. Tente de novo depois.'); }
+  el.disabled = false; el.textContent = '🔄 Procurar atualização';
+};
