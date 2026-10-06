@@ -1,0 +1,26 @@
+rules_version = '2';
+
+// Cada pessoa só lê e escreve os próprios dados.
+// O admin pode LER os dados de todos. A chave do Gemini não fica na nuvem.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function logado(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
+    function admin() {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && request.auth.token.email in ['admin@exemplo.com']; // troque pelo(s) e-mail(s) de admin
+    }
+
+    match /users/{uid} {
+      allow read, write: if logado(uid);
+      allow read: if admin();
+
+      match /meses/{mes} {
+        allow read, write: if logado(uid);
+        allow read: if admin();
+      }
+    }
+  }
+}
