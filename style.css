@@ -2,7 +2,7 @@
   --bg: #0d1117;
   --card: #161b22;
   --card2: #1f2630;
-  --line: #30363d;
+  --line: #262c35;
   --txt: #e6edf3;
   --muted: #8b949e;
   --accent: #39d353;
@@ -268,3 +268,44 @@ details.card > summary { list-style-position: inside; }
 }
 .demo-bar[hidden] { display: none; }
 .demo-bar.atualiza { background: rgba(57,211,83,.12); border-color: rgba(57,211,83,.4); }
+
+/* ---- visual mais limpo ---- */
+.card { border-radius: 16px; padding: 16px; }
+.topbar { justify-content: flex-start; }
+.demo-bar { padding: 6px 8px 6px 12px; }
+.demo-bar .btn { white-space: nowrap; }
+textarea#foodHint { min-height: 56px; line-height: 1.35; }
+.troca { margin: 4px 0 6px; }
+.troca select { margin-top: 4px; padding: 7px 10px; font-size: .9rem; }
+
+/* conversa com a IA recolhida num botão */
+.chat-wrap { margin-top: 12px; }
+.chat-sum {
+  list-style: none; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--card2);
+  font-size: .85rem; color: var(--txt);
+}
+.chat-sum::-webkit-details-marker { display: none; }
+.chat-wrap[open] > .chat-sum { background: rgba(57,211,83,.12); border-color: rgba(57,211,83,.35); }
+.chat-wrap .chat { margin-top: 8px; }
+
+/* seções recolhíveis do perfil */
+details.sec > summary { list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: space-between; }
+details.sec > summary::-webkit-details-marker { display: none; }
+details.sec > summary h3 { margin: 0; }
+details.sec > summary::after { content: '›'; color: var(--muted); font-size: 1.3rem; transition: transform .15s; }
+details.sec[open] > summary::after { transform: rotate(90deg); }
+details.sec[open] > summary { margin-bottom: 10px; }
+
+/* exercício tocável na aba Treinos */
+.ex-list .ex-main.pick { cursor: pointer; }
+.ex-list .icons .icon { padding: 6px; }
+
+@media (max-width: 360px) {
+  .lema { display: none; }
+  main { padding: 10px 12px; }
+  .card { padding: 14px; }
+}
+.solto { margin: -2px 0 12px; }
+.solto .chat-wrap { margin-top: 0; }
+.solto .chat-wrap[open] { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 12px; }

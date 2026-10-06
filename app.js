@@ -122,7 +122,7 @@ function save() {
 }
 
 // estado só da interface
-const UI = { tab: 'freq', viewSplitId: null, diaryDate: hojeISO(), pending: null, periodo: 7, esperaSessao: false, chatModelo: null,
+const UI = { secAberta: {}, tab: 'freq', viewSplitId: null, diaryDate: hojeISO(), pending: null, periodo: 7, esperaSessao: false, chatModelo: null,
   chatAtiv: { msgs: [], lote: null }, calMes: null, relDias: 90 };
 
 /* ---------------- helpers de domínio ---------------- */
@@ -394,15 +394,21 @@ function difsModelo(r) {
 }
 
 // caixa de conversa com a IA (usada na comida, no treino do dia e no modelo)
+// <details> que lembra se estava aberto entre uma renderização e outra
+const aberta = (id, padrao = false) => (UI.secAberta[id] ?? padrao) ? 'open' : '';
+
+// conversa com a IA: fica recolhida num botão até ser usada
 function chatBox({ id, msgs, esperando, placeholder, titulo = '💬 Falar com a IA' }) {
-  return `<div class="chat">
-    <div class="muted small" style="margin:14px 0 4px">${titulo}</div>
+  const temConversa = (msgs || []).length > 0 || esperando;
+  return `<details class="chat-wrap" data-sec="chat-${id}" ${aberta('chat-' + id, temConversa)}>
+    <summary class="chat-sum">${titulo}</summary>
+    <div class="chat">
     ${(msgs || []).map(m => `<div class="msg ${m.role}">${esc(m.text)}</div>`).join('')}
     ${esperando ? '<div class="msg model muted">pensando…</div>' : ''}
     <form class="row" data-chat="${id}" style="flex-wrap:nowrap;margin-top:6px">
       <input type="text" placeholder="${esc(placeholder)}" autocomplete="off" ${esperando ? 'disabled' : ''}>
       <button class="btn sm primary" ${esperando ? 'disabled' : ''}>Enviar</button>
-    </form></div>`;
+    </form></div></details>`;
 }
 const histGemini = msgs => msgs.slice(-20).map(m => ({
   role: m.role, parts: [{ text: m.role === 'model' ? JSON.stringify({ resposta: m.text }) : m.text }],
@@ -501,11 +507,10 @@ function sessaoHTML(r, pc) {
   const rotulo = r.editId ? `Editando treino de ${dataCurta(r.data)}` : r.data === hojeISO() ? 'Treino de hoje' : `Treino aberto de ${dataCurta(r.data)}`;
   const difs = difsModelo(r);
   return `
-    <div class="muted small">Modelo vigente: <b>${esc(activeSplit()?.nome || '')}</b></div>
-    <div class="next"><span class="dot" style="--cor:${r.cor}"></span>
+    <div class="next" style="margin-top:0"><span class="dot" style="--cor:${r.cor}"></span>
       <div class="grow"><div class="muted small">${rotulo}</div><h2>${esc(r.nome)}</h2></div>
       <span class="badge">${feitos}/${r.exercicios.length}${kcal != null ? ` · ${kcal} kcal` : ''}</span></div>
-    ${sp && sp.dias.length > 1 && !r.editId ? `<label class="small">Hoje vou fazer
+    ${sp && sp.dias.length > 1 && !r.editId ? `<label class="small troca">Trocar o treino de hoje
       <select data-sx-trocar>${sp.dias.map(d => `<option value="${d.id}" ${d.id === r.diaId ? 'selected' : ''}>${esc(d.nome)}</option>`).join('')}</select></label>` : ''}
     <ul class="checklist">${r.exercicios.map((e, i) => `
       <li class="${e.feito ? 'done' : ''}">
@@ -519,7 +524,7 @@ function sessaoHTML(r, pc) {
       <button class="btn sm ghost" data-act="sxExtra">+ Exercício extra</button>
     </div>
     ${kcal == null ? `<p class="muted small">Preencha seu peso em <a href="#" data-act="tab" data-tab="perfil" style="color:var(--accent)">Perfil</a> pra ver as calorias gastas.</p>` : ''}
-    ${chatBox({ id: 'sessao', msgs: r.chat, esperando: UI.esperaSessao, placeholder: 'ex: não fiz leg press; supino 3×6 com 50 kg', titulo: '💬 Conte pra IA como foi' })}
+    ${chatBox({ id: 'sessao', msgs: r.chat, esperando: UI.esperaSessao, placeholder: 'ex: não fiz leg press; supino 3×6 com 50 kg', titulo: '💬 Contar pra IA como foi' })}
     ${difs.length ? `<div class="row small" style="margin-top:10px;flex-wrap:nowrap">
       <input type="checkbox" id="sxAtualiza" ${r.atualizarModelo ? 'checked' : ''} style="width:auto;flex:none">
       <label for="sxAtualiza" style="margin:0;color:var(--txt)">Atualizar no modelo: ${esc(difs.map(d => d.e.nome).join(', '))}</label></div>` : ''}
@@ -552,9 +557,11 @@ function fieldHTML(f) {
     placeholder="${esc(f.placeholder || '')}" ${f.required ? 'required' : ''} ${f.type === 'number' ? 'inputmode="decimal"' : ''}></label>`;
 }
 
-function formModal({ title, fields, onSave, saveLabel = 'Salvar' }) {
+function formModal({ title, fields, onSave, saveLabel = 'Salvar', excluir = null }) {
+  UI.modalExcluir = excluir;
   openModal(`<h3>${esc(title)}</h3><form id="mform">${fields.map(fieldHTML).join('')}
-    <div class="row end"><button type="button" class="btn ghost" data-act="modalClose">Cancelar</button>
+    <div class="row end">${excluir ? '<button type="button" class="btn ghost danger" data-act="modalExcluir" style="margin-right:auto">Excluir</button>' : ''}
+    <button type="button" class="btn ghost" data-act="modalClose">Cancelar</button>
     <button class="btn primary">${saveLabel}</button></div></form>`);
   const form = $('#mform');
   setTimeout(() => form.querySelector('input[type=text]')?.focus(), 50);
@@ -576,9 +583,8 @@ function setTab(tab) {
 function render() {
   const bar = $('#demoBar');
   bar.hidden = !S.demo;
-  if (S.demo) bar.innerHTML = `🧪 <span class="grow">Dados simulados pra você explorar</span>
-    <button class="btn sm" data-act="demoSair">${localStorage.getItem('fitlog:antesDemo') ? 'Voltar aos meus dados' : 'Apagar e começar do zero'}</button>`;
-  $('#topDate').textContent = new Date().toLocaleDateString('pt-BR', { weekday: 'short', day: 'numeric', month: 'short' });
+  if (S.demo) bar.innerHTML = `🧪 <span class="grow">Dados de exemplo</span>
+    <button class="btn sm" data-act="demoSair">${localStorage.getItem('fitlog:antesDemo') ? 'Voltar aos meus dados' : 'Começar do zero'}</button>`;
   ({ freq: renderFreq, treinos: renderTreinos, comida: renderComida, resumo: renderResumo, perfil: renderPerfil })[UI.tab]();
 }
 
@@ -610,8 +616,8 @@ function renderFreq() {
   $('#tab-freq').innerHTML = `
     <div class="card">${topo}</div>
 
-    <div class="card">
-      ${chatBox({ id: 'atividades', msgs: UI.chatAtiv.msgs, esperando: UI.chatAtiv.esperando, titulo: '🏐 Outras atividades (futevôlei, corrida, bike…)',
+    <div class="solto">
+      ${chatBox({ id: 'atividades', msgs: UI.chatAtiv.msgs, esperando: UI.chatAtiv.esperando, titulo: '🏐 Registrar outra atividade',
         placeholder: 'ex: futevôlei segunda e quarta, 1h30, bem puxado' })}
       ${UI.chatAtiv.lote?.length ? '<button class="btn sm ghost" data-act="ativUndo" style="margin-top:8px">↶ Desfazer último registro</button>' : ''}
     </div>
@@ -749,17 +755,14 @@ function renderTreinos() {
               <button class="icon" data-act="dayMove" data-dia="${d.id}" data-dir="-1" aria-label="Subir">▲</button>
               <button class="icon" data-act="dayMove" data-dia="${d.id}" data-dir="1" aria-label="Descer">▼</button>
               <button class="icon" data-act="dayEdit" data-dia="${d.id}" aria-label="Editar">✎</button>
-              <button class="icon danger" data-act="dayDel" data-dia="${d.id}" aria-label="Excluir">✕</button>
             </div>
           </div>
           <ol class="ex-list">${d.exercicios.map(e => `
-            <li><div class="ex-main"><b>${esc(e.nome)}</b>
+            <li><div class="ex-main pick" data-act="exEdit" data-dia="${d.id}" data-ex="${e.id}"><b>${esc(e.nome)}</b>
               <small>${esc(serieTxt(e)) || '&nbsp;'}${e.obs ? ' — ' + esc(e.obs) : ''}</small></div>
               <div class="icons">
                 <button class="icon" data-act="exMove" data-dia="${d.id}" data-ex="${e.id}" data-dir="-1" aria-label="Subir">▲</button>
                 <button class="icon" data-act="exMove" data-dia="${d.id}" data-ex="${e.id}" data-dir="1" aria-label="Descer">▼</button>
-                <button class="icon" data-act="exEdit" data-dia="${d.id}" data-ex="${e.id}" aria-label="Editar">✎</button>
-                <button class="icon danger" data-act="exDel" data-dia="${d.id}" data-ex="${e.id}" aria-label="Excluir">✕</button>
               </div></li>`).join('')}
           </ol>
           <button class="btn sm ghost" data-act="exAdd" data-dia="${d.id}">+ Exercício</button>
@@ -790,7 +793,8 @@ function exModal(dia, e) {
     onSave: v => {
       if (e) Object.assign(e, v); else dia.exercicios.push({ id: uid(), ...v });
       save(); renderTreinos();
-    }
+    },
+    excluir: e && (() => { dia.exercicios = dia.exercicios.filter(x => x !== e); save(); renderTreinos(); }),
   });
 }
 
@@ -810,13 +814,17 @@ function dayModal(dia) {
         Object.assign(dia, { nome: v.nome, cor });
       } else sp.dias.push({ id: uid(), nome: v.nome, cor, exercicios: [] });
       save(); renderTreinos();
-    }
+    },
+    excluir: dia && (() => {
+      if (!confirm(`Excluir o treino "${dia.nome}" deste modelo?`)) return;
+      sp.dias = sp.dias.filter(x => x !== dia); save(); renderTreinos();
+    }),
   });
 }
 
 function modeloIAHTML(sp) {
   const c = UI.chatModelo?.splitId === sp.id ? UI.chatModelo : { msgs: [] };
-  return `<div class="card">
+  return `<div class="solto">
     ${chatBox({ id: 'modelo', msgs: c.msgs, esperando: c.esperando, titulo: '💬 Pedir pra IA mudar este modelo',
       placeholder: 'ex: coloca elevação pélvica depois do stiff' })}
     ${c.undo ? '<button class="btn sm ghost" data-act="modeloUndo" style="margin-top:8px">↶ Desfazer última mudança da IA</button>' : ''}
@@ -916,23 +924,44 @@ function melhorModelo(nomes) {
   return [...pool].sort((a, b) => versao(b) - versao(a) || a.length - b.length)[0];
 }
 
-// aceita uma pergunta (lista de parts) ou uma conversa inteira ([{ role, parts }])
-// se o modelo foi aposentado, troca sozinho pelo mais novo disponível e tenta de novo
-async function gemini(entrada, jaTrocou = false) {
-  const { apiKey, model } = S.settings;
-  const nome = (model || MODELO_PADRAO).replace(/^models\//, '');
-  const contents = entrada[0]?.role ? entrada : [{ role: 'user', parts: entrada }];
-  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(nome)}:generateContent`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
-    body: JSON.stringify({ contents, generationConfig: { responseMimeType: 'application/json', temperature: 0.2 } }),
-  });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) {
+const espera = ms => new Promise(r => setTimeout(r, ms));
+// servidor do Gemini cheio ("high demand") ou instável: vale tentar de novo
+const sobrecarga = (status, msg) => status === 503 || status === 500 || /high demand|overloaded|unavailable|try again later/i.test(msg);
+
+// chama um modelo; se o Gemini estiver sobrecarregado, tenta de novo até 2 vezes
+async function chamarModelo(nome, contents) {
+  for (let tentativa = 0; ; tentativa++) {
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(nome)}:generateContent`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': S.settings.apiKey },
+      body: JSON.stringify({ contents, generationConfig: { responseMimeType: 'application/json', temperature: 0.2 } }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok) return { j };
     const msg = j.error?.message || `HTTP ${r.status}`;
-    if (r.status === 429) throw new Error('Limite gratuito do Gemini atingido por agora. Espere um pouco e tente de novo.');
+    if (sobrecarga(r.status, msg) && tentativa < 2) { await espera(tentativa ? 4000 : 1500); continue; }
+    return { erro: { status: r.status, msg } };
+  }
+}
+
+// aceita uma pergunta (lista de parts) ou uma conversa inteira ([{ role, parts }])
+// se o modelo foi aposentado, troca sozinho pelo mais novo disponível e tenta de novo;
+// se estiver sobrecarregado, usa outro modelo só neste pedido
+async function gemini(entrada, jaTrocou = false) {
+  const nome = (S.settings.model || MODELO_PADRAO).replace(/^models\//, '');
+  const contents = entrada[0]?.role ? entrada : [{ role: 'user', parts: entrada }];
+  let { j, erro } = await chamarModelo(nome, contents);
+  if (erro && sobrecarga(erro.status, erro.msg)) {
+    let alt = null;
+    try { alt = melhorModelo((await listarModelos()).filter(n => n !== nome && /flash/.test(n))); } catch (e) { /* sem alternativa */ }
+    if (alt) ({ j, erro } = await chamarModelo(alt, contents));
+    if (erro) throw new Error('O Gemini está sobrecarregado agora (muita gente usando ao mesmo tempo). Tentei de novo algumas vezes; tente daqui a alguns minutos.');
+  }
+  if (erro) {
+    const { status, msg } = erro;
+    if (status === 429) throw new Error('Limite gratuito do Gemini atingido por agora. Espere um pouco e tente de novo.');
     if (/API key/i.test(msg)) throw new Error('Chave do Gemini inválida. Confira em Perfil → Configurações.');
-    if (!jaTrocou && (r.status === 404 || /no longer available|not found|not supported|deprecated|retired/i.test(msg))) {
+    if (!jaTrocou && (status === 404 || /no longer available|not found|not supported|deprecated|retired/i.test(msg))) {
       const sugerido = (msg.match(/use (?:models\/)?(gemini-[\w.-]+?)(?=[\s,.]*(?:for|$|\s))/i) || [])[1];
       let novo = sugerido;
       if (!novo) { try { novo = melhorModelo((await listarModelos()).filter(n => n !== nome)); } catch (e) { /* segue com o erro original */ } }
@@ -1231,7 +1260,7 @@ function renderComida() {
         <label class="btn big" style="margin:0"><span>📷</span>Foto do prato<input type="file" accept="image/*" data-modo="prato" hidden></label>
         <label class="btn big" style="margin:0"><span>🏷️</span>Foto do rótulo<input type="file" accept="image/*" data-modo="rotulo" hidden></label>
       </div>
-      <textarea id="foodHint" rows="1" style="margin-top:10px" placeholder="Detalhes opcionais (ex: arroz integral, 380 g de comida)"></textarea>
+      <textarea id="foodHint" rows="2" style="margin-top:10px" placeholder="Detalhes (opcional): arroz integral, 380 g…"></textarea>
     </div>
     <div id="foodResult"></div>
 
@@ -1410,14 +1439,6 @@ function renderResumo() {
           <li><span class="dot" style="--cor:${t.cor}"></span><div class="grow">${esc(nome)} <span class="muted small">(${t.ks.length}×)</span></div>
           <span class="small">~${fmt(baixo(t.ks.reduce((a, b) => a + b, 0) / t.ks.length))} kcal</span></li>`).join('')}</ul>
         <p class="muted small">Só conta o que passa do gasto em repouso (que já está no "dia normal") e só os exercícios marcados como feitos.</p>`}
-    </div>
-
-    <div class="card">
-      <div class="row between"><h3 style="margin:0">Meu corpo</h3><button class="btn sm ghost" data-act="tab" data-tab="perfil">Perfil ›</button></div>
-      ${pc.imc ? `<div class="row between small"><span>IMC</span><b>${(Math.floor(pc.imc * 10) / 10).toLocaleString('pt-BR')} (${imcCat(pc.imc)})</b></div>` : ''}
-      ${pc.tmb ? `<div class="row between small"><span>TMB (gasto em repouso)</span><b>${fmt(baixo(pc.tmb))} kcal</b></div>
-        <div class="row between small"><span>Dia normal, sem treino</span><b>${fmt(baixo(pc.base))} kcal</b></div>
-        <div class="muted small">Fórmula: ${pc.formula}</div>` : faltaPerfilHTML(pc)}
     </div>
 
     <div class="card">
@@ -1641,18 +1662,18 @@ function renderPerfil() {
         <button class="icon danger" data-act="pesoDel" data-d="${p.data}" aria-label="Remover">✕</button></li>`).join('')}</ul></details>` : ''}
     </div>
 
-    <div class="card">
-      <h3>Evolução do perfil</h3>
+    <details class="card sec" data-sec="evolucao" ${aberta('evolucao')}>
+      <summary><h3>Evolução do perfil</h3></summary>
       <p class="muted small">Todo dia que você abre o app ele guarda seu peso, TMB e gasto do dia. Dias passados usam os valores daquela época.</p>
       ${(S.historico || []).length >= 2 ? svgLinhas([
         { nome: 'TMB', cor: '#3b82f6', pts: S.historico.filter(h => h.tmb).map(h => [h.data, h.tmb]) },
         { nome: 'dia normal', cor: '#39d353', pts: S.historico.filter(h => h.base).map(h => [h.data, h.base]) },
       ], { un: ' kcal' }) + (S.historico.some(h => h.gordura) ? svgLinhas([{ nome: '% gordura', cor: '#f59e0b', pts: S.historico.filter(h => h.gordura).map(h => [h.data, h.gordura]) }], { h: 80, un: '%' }) : '')
       : '<p class="muted small">O gráfico aparece a partir do segundo dia com perfil preenchido.</p>'}
-    </div>
+    </details>
 
-    <div class="card">
-      <h3>Dados pessoais</h3>
+    <details class="card sec" data-sec="dados" ${aberta('dados')}>
+      <summary><h3>Dados pessoais</h3></summary>
       <div class="perfil-grid">
         <label>Sexo<select data-perfil="sexo">
           <option value="">Prefiro não dizer</option>
@@ -1665,10 +1686,10 @@ function renderPerfil() {
       <label>Rotina fora da academia <span class="muted">(usada se não informar passos)</span><select data-perfil="atividade">
         ${ATIVIDADES.map(([v, t]) => `<option value="${v}" ${sel('atividade', v)}>${t}</option>`).join('')}</select></label>
       <p class="muted small">Passos você vê no app de saúde do celular (média da semana). É mais preciso que escolher a rotina.</p>
-    </div>
+    </details>
 
-    <div class="card">
-      <h3>Composição corporal</h3>
+    <details class="card sec" data-sec="composicao" ${aberta('composicao')}>
+      <summary><h3>Composição corporal</h3></summary>
       <label>% de gordura <span class="muted">(se souber, de bioimpedância ou avaliação)</span>
         <input type="text" inputmode="decimal" data-perfil="gordura" value="${esc(pf.gordura)}" placeholder="opcional"></label>
       <div class="muted small" style="margin-bottom:6px">Ou estime pelas medidas, com fita métrica, em cm:</div>
@@ -1678,16 +1699,16 @@ function renderPerfil() {
         <label>Quadril<input type="text" inputmode="decimal" data-perfil="quadril" value="${esc(pf.quadril)}" placeholder="mulheres"></label>
       </div>
       <div id="medidasRes" class="small"></div>
-    </div>
+    </details>
 
-    <div class="card">
-      <h3>Calibração pelo seu histórico</h3>
+    <details class="card sec" data-sec="calibracao" ${aberta('calibracao')}>
+      <summary><h3>Calibração pelo seu histórico</h3></summary>
       <p class="muted small">As fórmulas são médias populacionais. Com seu peso real e o que você comeu, dá pra medir o <b>seu</b> gasto.</p>
       <div id="calRes"></div>
-    </div>
+    </details>
 
-    <div class="card">
-      <h3>Objetivo</h3>
+    <details class="card sec" data-sec="objetivo" ${aberta('objetivo')}>
+      <summary><h3>Objetivo</h3></summary>
       <div class="perfil-grid">
         <label>Quero<select data-perfil="objetivo">
           <option value="perder" ${sel('objetivo', 'perder')}>Perder gordura</option>
@@ -1697,17 +1718,17 @@ function renderPerfil() {
           ${['0.25', '0.5', '0.75', '1'].map(v => `<option value="${v}" ${sel('ritmo', v)}>${v.replace('.', ',')} kg/semana</option>`).join('')}</select></label>
       </div>
       <div id="objRes"></div>
-    </div>
+    </details>
 
-    <div class="card">
-      <h3>Metas diárias</h3>
+    <details class="card sec" data-sec="metas" ${aberta('metas')}>
+      <summary><h3>Metas diárias</h3></summary>
       <div class="macro-grid">
         <label>kcal<input type="text" inputmode="decimal" data-meta="kcal" value="${esc(s.metas.kcal)}"></label>
         <label>Prot (g)<input type="text" inputmode="decimal" data-meta="prot" value="${esc(s.metas.prot)}"></label>
         <label>Carb (g)<input type="text" inputmode="decimal" data-meta="carb" value="${esc(s.metas.carb)}"></label>
         <label>Gord (g)<input type="text" inputmode="decimal" data-meta="gord" value="${esc(s.metas.gord)}"></label>
       </div>
-    </div>
+    </details>
 
     <details class="card" id="cfgDetails" ${!s.apiKey || UI.abrirConfig ? 'open' : ''}>
       <summary><b>⚙️ Configurações</b> <span class="muted small">(chave do Gemini, backup)</span></summary>
@@ -1805,6 +1826,7 @@ function importar(e) {
 const ACTIONS = {
   tab: el => setTab(el.dataset.tab),
   modalClose: closeModal,
+  modalExcluir: () => { const f = UI.modalExcluir; closeModal(); if (f) f(); },
 
   // frequência
   cell: el => openDaySheet(el.dataset.date),
@@ -2047,6 +2069,11 @@ document.addEventListener('click', e => {
   const fn = ACTIONS[el.dataset.act];
   if (fn) { e.preventDefault(); fn(el, e); }
 });
+
+document.addEventListener('toggle', e => {
+  const d = e.target;
+  if (d.matches?.('details[data-sec]')) UI.secAberta[d.dataset.sec] = d.open;
+}, true);
 
 const CHATS = { comida: enviarChat, sessao: chatSessao, modelo: chatModelo, atividades: chatAtividades };
 document.addEventListener('submit', e => {

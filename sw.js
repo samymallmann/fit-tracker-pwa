@@ -2,7 +2,7 @@
 // Estratégia "rede primeiro": com internet sempre pega a versão mais nova
 // (atualizações aparecem na hora); sem internet, usa a cópia guardada.
 // A CADA publicação, aumente a versão abaixo: é isso que mostra o aviso "Nova versão" no app.
-const CACHE = 'fittracker-v3';
+const CACHE = 'fittracker-v5';
 const ARQUIVOS = ['./', 'index.html', 'style.css', 'firebase-config.js', 'demo.js', 'app.js', 'nuvem.js', 'manifest.webmanifest', 'icon.svg'];
 
 self.addEventListener('install', e => {
