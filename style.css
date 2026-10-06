@@ -267,3 +267,4 @@ details.card > summary { list-style-position: inside; }
   background: rgba(168,85,247,.14); border: 1px solid rgba(168,85,247,.4);
 }
 .demo-bar[hidden] { display: none; }
+.demo-bar.atualiza { background: rgba(57,211,83,.12); border-color: rgba(57,211,83,.4); }

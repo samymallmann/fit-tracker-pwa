@@ -2076,6 +2076,24 @@ document.addEventListener('visibilitychange', () => {
   diaRender = hojeISO(); UI.diaryDate = diaRender; render();
 });
 
+// modo offline + aviso de versão nova
+// (o aviso aparece quando o sw.js muda: aumente CACHE em sw.js a cada publicação)
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
-  navigator.serviceWorker.register('sw.js').catch(() => { });
+  const tinhaVersao = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (tinhaVersao) avisoAtualizacao(); });
+  navigator.serviceWorker.register('sw.js').then(reg => {
+    const checar = () => reg.update().catch(() => { });
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) checar(); });
+    setInterval(checar, 30 * 60 * 1000);
+  }).catch(() => { });
 }
+
+function avisoAtualizacao() {
+  if ($('#atualizaBar')) return;
+  const b = document.createElement('div');
+  b.id = 'atualizaBar';
+  b.className = 'demo-bar atualiza';
+  b.innerHTML = '✨ <span class="grow">Nova versão do app disponível</span><button class="btn sm primary" data-act="recarregar">Atualizar</button>';
+  $('.topbar').after(b);
+}
+ACTIONS.recarregar = () => location.reload();

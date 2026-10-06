@@ -1,8 +1,8 @@
 // Service worker: deixa o app abrir offline.
 // Estratégia "rede primeiro": com internet sempre pega a versão mais nova
 // (atualizações aparecem na hora); sem internet, usa a cópia guardada.
-// Ao mudar a lista de arquivos, aumente a versão abaixo.
-const CACHE = 'fittracker-v1';
+// A CADA publicação, aumente a versão abaixo: é isso que mostra o aviso "Nova versão" no app.
+const CACHE = 'fittracker-v2';
 const ARQUIVOS = ['./', 'index.html', 'style.css', 'firebase-config.js', 'demo.js', 'app.js', 'nuvem.js', 'manifest.webmanifest', 'icon.svg'];
 
 self.addEventListener('install', e => {
