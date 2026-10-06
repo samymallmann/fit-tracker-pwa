@@ -23,7 +23,7 @@ const fmtData = iso => parseISO(iso).toLocaleDateString('pt-BR', { weekday: 'lon
 /* ---------------- estado ---------------- */
 
 const KEY = 'fitlog:v1';
-const VERSAO_APP = 5; // tools/publicar.py aumenta junto com CACHE em sw.js
+const VERSAO_APP = 6; // tools/publicar.py aumenta junto com CACHE em sw.js
 const MODELO_PADRAO = 'gemini-3.8-flash'; // o app troca sozinho se o Google aposentar este
 
 function ex(nome, series, reps, carga = '', obs = '') { return { id: uid(), nome, series, reps, carga, obs }; }
@@ -928,35 +928,63 @@ function melhorModelo(nomes) {
 const espera = ms => new Promise(r => setTimeout(r, ms));
 // servidor do Gemini cheio ("high demand") ou instável: vale tentar de novo
 const sobrecarga = (status, msg) => status === 503 || status === 500 || /high demand|overloaded|unavailable|try again later/i.test(msg);
+const versaoModelo = n => parseFloat((n.match(/gemini-(\d+(?:\.\d+)?)/) || [])[1] || 0);
 
-// chama um modelo; se o Gemini estiver sobrecarregado, tenta de novo até 2 vezes
-async function chamarModelo(nome, contents) {
-  for (let tentativa = 0; ; tentativa++) {
+// raciocínio "baixo" (não desligado): evita o modelo pensar demais e demorar,
+// sem abrir mão de raciocinar sobre porções e ingredientes (igual ao sw.js)
+function configGeracao(nome, pensarPouco) {
+  const g = { responseMimeType: 'application/json', temperature: 0.2 };
+  if (pensarPouco) {
+    if (versaoModelo(nome) >= 3) g.thinkingConfig = { thinkingLevel: 'low' };
+    else if (versaoModelo(nome) >= 2.5 && /flash/.test(nome)) g.thinkingConfig = { thinkingBudget: 1024 };
+  }
+  return g;
+}
+
+// chama um modelo; se o Gemini estiver sobrecarregado, tenta de novo (até `tentativas` vezes)
+async function chamarModelo(nome, contents, tentativas = 3) {
+  let pensarPouco = true;
+  for (let t = 0; ; t++) {
     const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(nome)}:generateContent`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-goog-api-key': S.settings.apiKey },
-      body: JSON.stringify({ contents, generationConfig: { responseMimeType: 'application/json', temperature: 0.2 } }),
+      body: JSON.stringify({ contents, generationConfig: configGeracao(nome, pensarPouco) }),
     });
     const j = await r.json().catch(() => ({}));
     if (r.ok) return { j };
     const msg = j.error?.message || `HTTP ${r.status}`;
-    if (sobrecarga(r.status, msg) && tentativa < 2) { await espera(tentativa ? 4000 : 1500); continue; }
+    if (r.status === 400 && /thinking/i.test(msg) && pensarPouco) { pensarPouco = false; t--; continue; } // modelo não aceita: manda sem
+    if (sobrecarga(r.status, msg) && t < tentativas - 1) { await espera([1500, 4000, 8000][t] || 8000); continue; }
     return { erro: { status: r.status, msg } };
   }
 }
 
+// outros "flash" pra tentar: estáveis mais novos, depois prévias, depois os "lite" (mais leves, quase sempre livres)
+function alternativasModelo(nomes, atual) {
+  const fl = nomes.filter(n => n !== atual && /flash/.test(n));
+  const ord = (a, b) => versaoModelo(b) - versaoModelo(a);
+  return [
+    ...fl.filter(n => !/lite|preview|exp/.test(n)).sort(ord),
+    ...fl.filter(n => /preview|exp/.test(n) && !/lite/.test(n)).sort(ord),
+    ...fl.filter(n => /lite/.test(n)).sort(ord),
+  ].slice(0, 3);
+}
+
 // aceita uma pergunta (lista de parts) ou uma conversa inteira ([{ role, parts }])
 // se o modelo foi aposentado, troca sozinho pelo mais novo disponível e tenta de novo;
-// se estiver sobrecarregado, usa outro modelo só neste pedido
+// se estiver sobrecarregado, tenta outros modelos só neste pedido
 async function gemini(entrada, jaTrocou = false) {
   const nome = (S.settings.model || MODELO_PADRAO).replace(/^models\//, '');
   const contents = entrada[0]?.role ? entrada : [{ role: 'user', parts: entrada }];
   let { j, erro } = await chamarModelo(nome, contents);
   if (erro && sobrecarga(erro.status, erro.msg)) {
-    let alt = null;
-    try { alt = melhorModelo((await listarModelos()).filter(n => n !== nome && /flash/.test(n))); } catch (e) { /* sem alternativa */ }
-    if (alt) ({ j, erro } = await chamarModelo(alt, contents));
-    if (erro) throw new Error('O Gemini está sobrecarregado agora (muita gente usando ao mesmo tempo). Tentei de novo algumas vezes; tente daqui a alguns minutos.');
+    let lista = [];
+    try { lista = alternativasModelo(await listarModelos(), nome); } catch (e) { /* sem alternativa */ }
+    for (const alt of lista) {
+      ({ j, erro } = await chamarModelo(alt, contents, 1));
+      if (!erro) break;
+    }
+    if (erro) throw new Error('O Gemini está sobrecarregado agora (muita gente usando ao mesmo tempo). Tentei vários modelos; tente daqui a alguns minutos.');
   }
   if (erro) {
     const { status, msg } = erro;
@@ -1003,26 +1031,134 @@ const temChave = () => {
   toast('Primeiro cole sua chave do Gemini em Perfil → Configurações.'); UI.abrirConfig = true; setTab('perfil'); return false;
 };
 
-async function analisar(file, modo) {
-  if (!temChave()) return;
-  const box = $('#foodResult');
-  box.innerHTML = `<div class="card" style="text-align:center"><div class="spinner"></div>
-    <div class="muted">Analisando ${modo === 'prato' ? 'o prato' : 'o rótulo'}…</div></div>`;
-  box.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  try {
-    const grande = await lerImagem(file, modo === 'rotulo' ? 1600 : 1024);
-    const thumb = (await lerImagem(file, 120)).toDataURL('image/jpeg', 0.7);
-    const b64 = grande.toDataURL('image/jpeg', 0.85).split(',')[1];
-    const dica = $('#foodHint')?.value.trim();
-    const prompt = (modo === 'prato' ? PROMPT_PRATO : PROMPT_ROTULO) + (dica ? `\nInformação extra do usuário: "${dica}"` : '');
-    const data = await gemini([{ text: prompt }, fotoPart(b64)]);
-    // img (foto grande) fica só na memória, para a conversa; no diário vai só a miniatura
-    UI.pending = { modo, data, thumb, img: b64, chat: [] };
-    renderResultado();
-  } catch (e) {
-    box.innerHTML = `<div class="card"><div class="alert">⚠️ ${esc(e.message)}</div></div>`;
+const MAX_FOTOS = 4;
+
+// prepara as fotos escolhidas (mesma resolução de antes: 1024 px no prato, 1600 px no rótulo, pra ler letras)
+async function adicionarFotos(files, modo) {
+  if (!UI.foto || UI.foto.modo !== modo) UI.foto = { modo, fotos: [], dica: UI.foto?.dica || '' };
+  for (const f of files) {
+    if (UI.foto.fotos.length >= MAX_FOTOS) { toast(`No máximo ${MAX_FOTOS} fotos por análise.`); break; }
+    try {
+      const grande = await lerImagem(f, modo === 'rotulo' ? 1600 : 1024);
+      UI.foto.fotos.push({ b64: grande.toDataURL('image/jpeg', 0.85).split(',')[1], thumb: (await lerImagem(f, 120)).toDataURL('image/jpeg', 0.7) });
+    } catch (e) { toast(e.message); }
   }
+  UI.pending = null;
+  renderResultado();
+  $('#foodResult')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
+
+function composerHTML(c) {
+  return `<div class="card">
+    <div class="row between"><h3 style="margin:0">${c.modo === 'prato' ? '📷 Prato' : '🏷️ Rótulo'} · ${c.fotos.length} foto${c.fotos.length > 1 ? 's' : ''}</h3>
+      <button class="icon" data-act="fotoCancelar" aria-label="Cancelar">✕</button></div>
+    <div class="fotos">
+      ${c.fotos.map((f, i) => `<div class="foto"><img src="${f.thumb}" alt=""><button data-act="fotoDel" data-i="${i}" aria-label="Remover foto">✕</button></div>`).join('')}
+      ${c.fotos.length < MAX_FOTOS ? `<label class="foto foto-add">+<input type="file" accept="image/*" multiple id="fotoMais" hidden></label>` : ''}
+    </div>
+    <textarea id="fotoDica" rows="2" placeholder="${c.modo === 'prato' ? 'Descreva o que ajudar: arroz integral, pesei 380 g, frito no azeite…' : 'Ex: comi 2 unidades; é a versão zero açúcar…'}">${esc(c.dica)}</textarea>
+    <button class="btn primary" data-act="fotoAnalisar" style="width:100%;margin-top:10px">Analisar ${c.fotos.length > 1 ? 'fotos' : 'foto'}</button>
+  </div>`;
+}
+
+const promptFotos = (modo, n, dica) => (modo === 'prato' ? PROMPT_PRATO : PROMPT_ROTULO)
+  + (n > 1 ? (modo === 'prato'
+    ? `\nVocê recebeu ${n} fotos da MESMA refeição (ângulos ou partes diferentes). Considere todas juntas, sem contar o mesmo alimento duas vezes.`
+    : `\nVocê recebeu ${n} fotos do MESMO produto (frente, tabela nutricional, ingredientes). Junte as informações de todas.`) : '')
+  + (dica ? `\nInformação do usuário (use como referência principal quando conflitar com a foto): "${dica}"` : '');
+
+async function analisarFotos() {
+  const c = UI.foto;
+  if (!c?.fotos.length || !temChave()) return;
+  const contents = [{ role: 'user', parts: [{ text: promptFotos(c.modo, c.fotos.length, c.dica.trim()) }, ...c.fotos.map(f => fotoPart(f.b64))] }];
+  const a = { id: uid(), modo: c.modo, thumb: c.fotos[0].thumb, contents, em: Date.now() };
+  UI.foto = null;
+  guardarAnalise(a);
+  enviarAnalise(a);
+}
+
+// manda pro service worker (continua mesmo se o app for fechado). Se ele não confirmar em 2,5 s
+// (versão antiga do service worker ou navegador sem suporte), analisa aqui mesmo, com o app aberto.
+function enviarAnalise(a) {
+  a.em = Date.now(); guardarAnalise(a);
+  renderResultado();
+  const sw = navigator.serviceWorker?.controller;
+  if (sw) sw.postMessage({ tipo: 'analisar', id: a.id, contents: a.contents, model: S.settings.model || MODELO_PADRAO, apiKey: S.settings.apiKey });
+  setTimeout(() => { if (!RECEBIDAS.has(a.id) && lerAnalise()?.id === a.id) analisarAqui(a); }, sw ? 2500 : 0);
+}
+
+async function analisarAqui(a) {
+  a.local = true; guardarAnalise(a); renderResultado(); // aqui o app precisa ficar aberto
+  try { receberAnalise({ id: a.id, ok: true, data: await gemini(a.contents) }); }
+  catch (e) { receberAnalise({ id: a.id, ok: false, erro: e.message }); }
+}
+
+/* ---- análise em andamento (guardada no aparelho até o resultado chegar) ---- */
+
+const CHAVE_ANALISE = 'fitlog:analise';
+const lerAnalise = () => { try { return JSON.parse(localStorage.getItem(CHAVE_ANALISE)); } catch (e) { return null; } };
+function guardarAnalise(a) { try { localStorage.setItem(CHAVE_ANALISE, JSON.stringify(a)); } catch (e) { toast('Sem espaço pra guardar a análise.'); } }
+function limparAnalise(id) {
+  try { localStorage.removeItem(CHAVE_ANALISE); } catch (e) { }
+  caches.open('analises-de-foto').then(c => c.delete(`./__analise/${id}`)).catch(() => { });
+}
+
+function analisandoHTML(a, noFundo) {
+  const notif = noFundo && 'Notification' in window && Notification.permission === 'default';
+  const atrasada = Date.now() - a.em > 6 * 60 * 1000;
+  if (atrasada) return `<div class="card"><div class="alert">⚠️ A análise da foto não terminou (o app pode ter sido fechado por muito tempo).</div>
+    <div class="row end"><button class="btn ghost" data-act="analiseDescartar">Descartar</button><button class="btn primary" data-act="analiseRefazer">Tentar de novo</button></div></div>`;
+  return `<div class="card" style="text-align:center">
+    <div class="row" style="justify-content:center;gap:12px"><img class="thumb" src="${a.thumb}" alt=""><div class="spinner" style="margin:0"></div></div>
+    <div style="margin-top:10px">Analisando ${a.modo === 'prato' ? 'o prato' : 'o rótulo'}…</div>
+    ${noFundo ? '<div class="muted small">Pode sair do app: a análise continua e o resultado fica guardado aqui.</div>' : ''}
+    ${notif ? '<button class="btn sm" data-act="ativarNotif" style="margin-top:10px">🔔 Me avisar quando terminar</button>' : ''}
+  </div>`;
+}
+
+function receberAnalise(res) {
+  const a = lerAnalise();
+  if (!a || a.id !== res.id) return;
+  limparAnalise(a.id);
+  if (res.ok) {
+    if (res.trocarPadrao && res.modelo) { S.settings.model = res.modelo; save(); toast(`Modelo do Gemini atualizado para ${res.modelo}`); }
+    const img = a.contents?.[0]?.parts?.find(p => p.inline_data)?.inline_data?.data;
+    UI.pending = { modo: a.modo, data: res.data, thumb: a.thumb, img, chat: [] };
+    if (UI.tab !== 'comida') toast('Análise pronta! Veja na aba Comida 🍽️');
+  } else {
+    UI.erroAnalise = res.erro;
+  }
+  if (UI.tab === 'comida') renderComida();
+}
+
+// ao abrir o app: o resultado pode ter chegado com o app fechado
+async function checarAnalise() {
+  const a = lerAnalise();
+  if (!a) return;
+  try {
+    const r = await caches.match(`./__analise/${a.id}`);
+    if (r) receberAnalise(await r.json());
+  } catch (e) { /* segue esperando */ }
+}
+
+const RECEBIDAS = new Set(); // análises que o service worker confirmou que está fazendo
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.addEventListener('message', e => {
+    if (e.data?.tipo === 'recebido') RECEBIDAS.add(e.data.id);
+    if (e.data?.tipo === 'analise') receberAnalise(e.data);
+  });
+}
+
+/* ---- revisão da análise guardada: fechar o app no meio não perde nada ---- */
+
+const CHAVE_REVISAO = 'fitlog:revisao';
+function guardarRevisao() {
+  try {
+    if (UI.pending) localStorage.setItem(CHAVE_REVISAO, JSON.stringify({ ...UI.pending, img: undefined, esperando: false }));
+    else localStorage.removeItem(CHAVE_REVISAO);
+  } catch (e) { /* sem espaço: só não guarda */ }
+}
+try { UI.pending = JSON.parse(localStorage.getItem(CHAVE_REVISAO)) || null; } catch (e) { }
 
 /* ---- conversa com a IA sobre a análise ---- */
 
@@ -1127,8 +1263,20 @@ async function calcularSobra() {
 
 function renderResultado() {
   const p = UI.pending, box = $('#foodResult');
+  guardarRevisao();
   if (!box) return;
-  if (!p) { box.innerHTML = ''; return; }
+  if (!p) {
+    const a = lerAnalise();
+    if (a) box.innerHTML = analisandoHTML(a, !a.local);
+    else if (UI.erroAnalise) box.innerHTML = `<div class="card"><div class="alert">⚠️ ${esc(UI.erroAnalise)}</div>
+      <div class="row end"><button class="btn ghost" data-act="erroFechar">Fechar</button></div></div>`;
+    else if (UI.foto?.fotos.length) {
+      box.innerHTML = composerHTML(UI.foto);
+      $('#fotoDica').addEventListener('input', e => { UI.foto.dica = e.target.value; });
+      $('#fotoMais')?.addEventListener('change', e => { const fs = [...e.target.files]; e.target.value = ''; if (fs.length) adicionarFotos(fs, UI.foto.modo); });
+    } else box.innerHTML = '';
+    return;
+  }
   const d = p.data;
   const botoes = `<div class="row end" style="margin-top:12px">
       <button class="btn ghost" data-act="foodDiscard">${p.editId ? 'Fechar' : p.modo === 'prato' ? 'Descartar' : 'Só consultei'}</button>
@@ -1258,10 +1406,10 @@ function renderComida() {
     <div class="card">
       <h3>Analisar com IA</h3>
       <div class="seg">
-        <label class="btn big" style="margin:0"><span>📷</span>Foto do prato<input type="file" accept="image/*" data-modo="prato" hidden></label>
-        <label class="btn big" style="margin:0"><span>🏷️</span>Foto do rótulo<input type="file" accept="image/*" data-modo="rotulo" hidden></label>
+        <label class="btn big" style="margin:0"><span>📷</span>Foto do prato<input type="file" accept="image/*" multiple data-modo="prato" hidden></label>
+        <label class="btn big" style="margin:0"><span>🏷️</span>Foto do rótulo<input type="file" accept="image/*" multiple data-modo="rotulo" hidden></label>
       </div>
-      <textarea id="foodHint" rows="2" style="margin-top:10px" placeholder="Detalhes (opcional): arroz integral, 380 g…"></textarea>
+      <p class="muted small" style="margin:8px 0 0">Dá pra mandar até ${MAX_FOTOS} fotos e uma descrição pra ajudar a IA.</p>
     </div>
     <div id="foodResult"></div>
 
@@ -1284,8 +1432,8 @@ function renderComida() {
       <button class="btn sm ghost" data-act="mealManual">+ Adicionar manualmente</button>
     </div>`;
 
-  for (const inp of document.querySelectorAll('#tab-comida input[type=file]')) {
-    inp.addEventListener('change', () => { const f = inp.files[0]; inp.value = ''; if (f) analisar(f, inp.dataset.modo); });
+  for (const inp of document.querySelectorAll('#tab-comida input[type=file][data-modo]')) {
+    inp.addEventListener('change', () => { const fs = [...inp.files]; inp.value = ''; if (fs.length) adicionarFotos(fs, inp.dataset.modo); });
   }
   renderResultado();
 }
@@ -2013,6 +2161,17 @@ const ACTIONS = {
 
   // comida
   foodSave: salvarComida,
+  fotoAnalisar: analisarFotos,
+  fotoCancelar: () => { UI.foto = null; renderResultado(); },
+  fotoDel: el => { UI.foto.fotos.splice(+el.dataset.i, 1); if (!UI.foto.fotos.length) UI.foto = null; renderResultado(); },
+  erroFechar: () => { UI.erroAnalise = null; renderResultado(); },
+  analiseDescartar: () => { const a = lerAnalise(); if (a) limparAnalise(a.id); renderResultado(); },
+  analiseRefazer: () => { const a = lerAnalise(); if (a) enviarAnalise(a); },
+  ativarNotif: async () => {
+    const r = await Notification.requestPermission().catch(() => 'denied');
+    toast(r === 'granted' ? 'Pronto: te aviso quando a análise terminar 🔔' : 'Sem permissão de notificação; o resultado aparece aqui quando abrir o app.');
+    renderResultado();
+  },
   foodDiscard: () => { UI.pending = null; renderResultado(); },
   diary: el => { UI.diaryDate = addDias(UI.diaryDate, +el.dataset.dir); if (UI.diaryDate > hojeISO()) UI.diaryDate = hojeISO(); renderComida(); },
   mealView: el => verRefeicao(S.refeicoes.find(r => r.id === el.dataset.id)),
@@ -2099,6 +2258,11 @@ document.addEventListener('change', e => {
   S.rascunho = novaSessao(dia, sp.id, atual.data); save(); renderFreq();
 });
 
+function checkarAnaliseAoVoltar() {
+  checarAnalise();
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) checarAnalise(); });
+}
+
 function boasVindas() {
   openModal(`<h3>Bem-vindo ao FitTracker 💪</h3>
     <p class="small">O app abriu com <b>dados simulados</b> pra você explorar as telas. Quando quiser começar de verdade, toque em
@@ -2122,11 +2286,13 @@ function boasVindas() {
 
 /* ---------------- inicialização ---------------- */
 
+try { const pa = new URLSearchParams(location.search).get('aba'); if (pa) localStorage.setItem('fitlog:tab', pa); } catch (e) { }
 try { let t = localStorage.getItem('fitlog:tab'); if (t === 'config') t = 'perfil'; if (t && document.getElementById('tab-' + t)) UI.tab = t; } catch (e) { }
 if (PRIMEIRA_VEZ) S = gerarDemo();
 save(); // registra o perfil de hoje no histórico
 setTab(UI.tab);
 if (PRIMEIRA_VEZ) boasVindas();
+checkarAnaliseAoVoltar();
 // virou o dia com o app aberto? atualiza ao voltar pra ele
 // (só nesse caso: voltar da câmera não pode apagar a análise em andamento)
 let diaRender = hojeISO();

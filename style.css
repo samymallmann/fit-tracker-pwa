@@ -309,3 +309,14 @@ details.sec[open] > summary { margin-bottom: 10px; }
 .solto { margin: -2px 0 12px; }
 .solto .chat-wrap { margin-top: 0; }
 .solto .chat-wrap[open] { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 12px; }
+
+/* fotos escolhidas antes de analisar */
+.fotos { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
+.foto { position: relative; width: 72px; height: 72px; border-radius: 12px; overflow: hidden; background: var(--card2); flex: none; }
+.foto img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.foto button {
+  position: absolute; top: 3px; right: 3px; width: 22px; height: 22px; border-radius: 50%; border: none; padding: 0;
+  background: rgba(0,0,0,.65); color: #fff; font-size: .7rem; cursor: pointer;
+}
+.foto-add { display: grid; place-items: center; font-size: 1.8rem; color: var(--muted); border: 1.5px dashed var(--line); cursor: pointer; margin: 0; }
+#fotoDica { min-height: 56px; line-height: 1.35; }
