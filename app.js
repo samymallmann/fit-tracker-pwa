@@ -23,6 +23,7 @@ const fmtData = iso => parseISO(iso).toLocaleDateString('pt-BR', { weekday: 'lon
 /* ---------------- estado ---------------- */
 
 const KEY = 'fitlog:v1';
+const MODELO_PADRAO = 'gemini-3.8-flash'; // o app troca sozinho se o Google aposentar este
 
 function ex(nome, series, reps, carga = '', obs = '') { return { id: uid(), nome, series, reps, carga, obs }; }
 
@@ -80,7 +81,7 @@ function criarDeModelo(m, nome) {
 function seed() {
   const atual = criarDeModelo(MODELOS[0], 'Meu treino atual');
   return {
-    settings: { apiKey: '', model: 'gemini-2.5-flash', metas: { kcal: 2200, prot: 140, carb: 250, gord: 70 } },
+    settings: { apiKey: '', model: MODELO_PADRAO, metas: { kcal: 2200, prot: 140, carb: 250, gord: 70 } },
     splits: [atual],   // modelos de treino do usuário
     activeSplitId: atual.id,
     perfil: { sexo: '', nascimento: '', altura: '', gordura: '', cintura: '', pescoco: '', quadril: '',
@@ -896,10 +897,30 @@ Responda SOMENTE com JSON válido neste formato (use null se um valor não estiv
  "resumo": "2-3 frases: vale a pena? para quem? alternativa melhor?"}
 "nota_saude" vai de 0 (evitar) a 10 (ótimo). "precisao" (0 a 100): quão bem deu pra ler a tabela. Se a imagem não for um rótulo, explique no "resumo".`;
 
+// lista os modelos do Gemini que esta chave pode usar pra gerar texto
+async function listarModelos() {
+  const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=200', { headers: { 'x-goog-api-key': S.settings.apiKey } });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error?.message || `HTTP ${r.status}`);
+  return (j.models || [])
+    .filter(m => m.supportedGenerationMethods?.includes('generateContent') && /gemini/.test(m.name) && !/tts|image|embedding|live|audio/.test(m.name))
+    .map(m => m.name.replace(/^models\//, ''));
+}
+
+// o "flash" de versão mais alta (estável, se houver): rápido, barato e com cota grátis
+function melhorModelo(nomes) {
+  const versao = n => parseFloat((n.match(/gemini-(\d+(?:\.\d+)?)/) || [])[1] || 0);
+  const flash = nomes.filter(n => /flash/.test(n) && !/lite/.test(n));
+  const estaveis = flash.filter(n => !/preview|exp|thinking/.test(n));
+  const pool = estaveis.length ? estaveis : flash.length ? flash : nomes;
+  return [...pool].sort((a, b) => versao(b) - versao(a) || a.length - b.length)[0];
+}
+
 // aceita uma pergunta (lista de parts) ou uma conversa inteira ([{ role, parts }])
-async function gemini(entrada) {
+// se o modelo foi aposentado, troca sozinho pelo mais novo disponível e tenta de novo
+async function gemini(entrada, jaTrocou = false) {
   const { apiKey, model } = S.settings;
-  const nome = (model || 'gemini-2.5-flash').replace(/^models\//, '');
+  const nome = (model || MODELO_PADRAO).replace(/^models\//, '');
   const contents = entrada[0]?.role ? entrada : [{ role: 'user', parts: entrada }];
   const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(nome)}:generateContent`, {
     method: 'POST',
@@ -911,6 +932,16 @@ async function gemini(entrada) {
     const msg = j.error?.message || `HTTP ${r.status}`;
     if (r.status === 429) throw new Error('Limite gratuito do Gemini atingido por agora. Espere um pouco e tente de novo.');
     if (/API key/i.test(msg)) throw new Error('Chave do Gemini inválida. Confira em Perfil → Configurações.');
+    if (!jaTrocou && (r.status === 404 || /no longer available|not found|not supported|deprecated|retired/i.test(msg))) {
+      const sugerido = (msg.match(/use (?:models\/)?(gemini-[\w.-]+?)(?=[\s,.]*(?:for|$|\s))/i) || [])[1];
+      let novo = sugerido;
+      if (!novo) { try { novo = melhorModelo((await listarModelos()).filter(n => n !== nome)); } catch (e) { /* segue com o erro original */ } }
+      if (novo && novo !== nome) {
+        S.settings.model = novo; save();
+        toast(`Modelo do Gemini atualizado para ${novo}`);
+        return gemini(entrada, true);
+      }
+    }
     throw new Error(msg);
   }
   const txt = (j.candidates?.[0]?.content?.parts || []).filter(p => !p.thought).map(p => p.text || '').join('').trim()
@@ -1697,7 +1728,7 @@ function renderPerfil() {
           <button class="btn sm" data-act="toggleKey" type="button">👁</button></div></label>
       <label>Modelo
         <input type="text" id="cfgModel" list="modelos" value="${esc(s.model)}"></label>
-      <datalist id="modelos"><option value="gemini-2.5-flash"><option value="gemini-2.5-flash-lite"></datalist>
+      <datalist id="modelos"><option value="${MODELO_PADRAO}"></datalist>
       <button class="btn sm" data-act="testKey">Testar chave e listar modelos</button>
       <div id="keyStatus" class="muted small" style="margin-top:8px"></div>
 
@@ -1716,7 +1747,7 @@ function renderPerfil() {
   UI.abrirConfig = false;
 
   $('#cfgKey').addEventListener('change', e => { S.settings.apiKey = e.target.value.trim(); save(); toast('Chave salva'); });
-  $('#cfgModel').addEventListener('change', e => { S.settings.model = e.target.value.trim().replace(/^models\//, '') || 'gemini-2.5-flash'; save(); toast('Modelo salvo'); });
+  $('#cfgModel').addEventListener('change', e => { S.settings.model = e.target.value.trim().replace(/^models\//, '') || MODELO_PADRAO; save(); toast('Modelo salvo'); });
   for (const inp of document.querySelectorAll('[data-meta]')) {
     inp.addEventListener('change', () => { S.settings.metas[inp.dataset.meta] = num(inp.value); save(); });
   }
@@ -1735,16 +1766,12 @@ async function testarChave() {
   if (!S.settings.apiKey) { st.textContent = 'Cole a chave primeiro.'; return; }
   st.textContent = 'Testando…';
   try {
-    const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=200', { headers: { 'x-goog-api-key': S.settings.apiKey } });
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.error?.message || `HTTP ${r.status}`);
-    const nomes = (j.models || [])
-      .filter(m => m.supportedGenerationMethods?.includes('generateContent') && /gemini/.test(m.name) && !/tts|image|embedding|live|audio/.test(m.name))
-      .map(m => m.name.replace(/^models\//, ''));
+    const nomes = await listarModelos();
     $('#modelos').innerHTML = nomes.map(n => `<option value="${esc(n)}">`).join('');
-    const atual = nomes.includes(S.settings.model);
-    st.innerHTML = `✅ Chave funcionando. ${nomes.length} modelos disponíveis.` +
-      (atual ? '' : ` <span style="color:#f0b43e">O modelo "${esc(S.settings.model)}" não apareceu na lista; escolha outro no campo Modelo.</span>`);
+    if (!nomes.includes(S.settings.model)) { S.settings.model = melhorModelo(nomes) || MODELO_PADRAO; save(); }
+    await gemini([{ text: 'Responda só com o JSON {"ok": true}' }]); // chamada real: confirma que o modelo responde
+    $('#cfgModel').value = S.settings.model;
+    st.innerHTML = `✅ Chave funcionando com o modelo <b>${esc(S.settings.model)}</b>. ${nomes.length} modelos disponíveis.`;
   } catch (e) {
     st.innerHTML = `<span style="color:var(--danger)">❌ ${esc(e.message)}</span>`;
   }
