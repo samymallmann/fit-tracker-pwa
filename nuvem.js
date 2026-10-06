@@ -30,7 +30,7 @@ async function nuvemIniciar() {
     const app = appM.initializeApp(window.FIREBASE_CONFIG);
     fb = { ...authM, ...fsM, auth: authM.getAuth(app), db: fsM.getFirestore(app) };
     NUVEM.pronto = true;
-    fb.getRedirectResult(fb.auth).catch(() => { });
+    fb.getRedirectResult(fb.auth).catch(e => { NUVEM.erro = ERROS_LOGIN[e.code] || null; atualizaContaUI(); });
     fb.onAuthStateChanged(fb.auth, async user => {
       NUVEM.user = user;
       NUVEM.admin = !!user && (window.ADMINS || []).includes(user.email);
@@ -45,13 +45,26 @@ async function nuvemIniciar() {
   }
 }
 
+// erros de login mais comuns, em português
+const ERROS_LOGIN = {
+  'auth/operation-not-allowed': 'O login com Google ainda não foi ativado no Firebase (Authentication → Provedores → Google).',
+  'auth/unauthorized-domain': 'Este endereço não está autorizado no Firebase (Authentication → Configurações → Domínios autorizados).',
+  'auth/network-request-failed': 'Sem internet agora. Tente de novo quando conectar.',
+  'auth/internal-error': 'O Google recusou o login. Confira se o endereço do site está nos URIs de redirecionamento do cliente OAuth.',
+  'auth/too-many-requests': 'Muitas tentativas seguidas. Espere um pouco e tente de novo.',
+};
+
 async function nuvemEntrar() {
   if (!NUVEM.pronto) { toast('Conectando à nuvem… tente de novo em instantes.'); return; }
   const prov = new fb.GoogleAuthProvider();
+  prov.setCustomParameters({ prompt: 'select_account' });
   try { await fb.signInWithPopup(fb.auth, prov); closeModal(); }
   catch (e) {
-    if (/popup-blocked|operation-not-supported/.test(e.code || '')) await fb.signInWithRedirect(fb.auth, prov);
-    else if (!/popup-closed|cancelled-popup/.test(e.code || '')) toast('Não deu pra entrar: ' + (e.code || e.message));
+    const c = e.code || '';
+    if (/popup-blocked|operation-not-supported/.test(c)) { await fb.signInWithRedirect(fb.auth, prov); return; }
+    if (/popup-closed|cancelled-popup/.test(c)) return;
+    const msg = ERROS_LOGIN[c] || 'Não deu pra entrar: ' + (c || e.message);
+    NUVEM.erro = msg; atualizaContaUI(); toast(msg);
   }
 }
 
@@ -186,7 +199,8 @@ function contaHTML() {
   if (!window.FIREBASE_CONFIG) return '<p class="muted small">Nuvem não configurada: seus dados ficam só neste aparelho.</p>';
   if (!NUVEM.pronto) return `<p class="muted small">${esc(NUVEM.erro || 'Conectando à nuvem…')}</p>`;
   if (!NUVEM.user) return `<p class="small">Entre com sua conta Google pra salvar na nuvem e usar em qualquer celular.</p>
-    <button class="btn primary" data-act="nuvemEntrar">Entrar com Google</button>`;
+    <button class="btn primary" data-act="nuvemEntrar">Entrar com Google</button>
+    ${NUVEM.erro ? `<div class="alert" style="margin-top:10px">⚠️ ${esc(NUVEM.erro)}</div>` : ''}`;
   const u = NUVEM.user;
   const status = S.demo ? '🧪 Dados simulados não vão pra nuvem. Saia da simulação pra começar a salvar.'
     : NUVEM.enviando ? '☁️ Salvando…'
